@@ -13,11 +13,17 @@ import (
 	"github.com/get-vix/vix/internal/whiteboard"
 )
 
-// boldColor is the hex color applied to bold (Strong) text in markdown.
-const boldColor = "#FFD080"
+// boldColor is the color applied to bold (Strong) text in markdown.
+// codeColor is the foreground color applied to inline code spans. These are
+// deliberately swapped relative to glamour's defaults: bold takes the red that
+// glamour uses for code, and inline code takes the amber that used to be bold.
+const (
+	boldColor = "203"     // ANSI 256 red (was glamour's inline-code color)
+	codeColor = "#FFD080" // warm amber (was vix's bold color)
+)
 
 // styledConfig returns a copy of the base glamour StyleConfig with the Strong
-// color overridden to boldColor.
+// and inline Code colors overridden (and swapped relative to the defaults).
 func styledConfig(base string) ansi.StyleConfig {
 	var cfg ansi.StyleConfig
 	if base == styles.DarkStyle {
@@ -25,12 +31,16 @@ func styledConfig(base string) ansi.StyleConfig {
 	} else {
 		cfg = styles.LightStyleConfig
 	}
-	color := boldColor
+	strong := boldColor
 	bold := true
 	cfg.Strong = ansi.StylePrimitive{
-		Color: &color,
+		Color: &strong,
 		Bold:  &bold,
 	}
+	// Override only the foreground color of inline code; keep glamour's
+	// prefix/suffix and per-theme background box intact.
+	code := codeColor
+	cfg.Code.Color = &code
 	return cfg
 }
 
