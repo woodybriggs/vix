@@ -1221,27 +1221,33 @@ public struct ThreadStartData: Codable, Sendable, Equatable {
 
 public struct ThreadSummary: Codable, Sendable, Equatable {
     public var attached: Bool?
+    public var closed: Bool?
     public var cwd: String
     public var firstMessage: String?
+    public var forkTurnIdx: Int64?
     public var id: String
     public var jobStatus: String?
     public var lastRequestAt: String?
     public var model: String
     public var origin: String?
+    public var parentId: String?
     public var startedAt: String?
     public var title: String?
     public var trigger: TriggerInfo?
     public var unread: Bool?
 
-    public init(attached: Bool? = nil, cwd: String, firstMessage: String? = nil, id: String, jobStatus: String? = nil, lastRequestAt: String? = nil, model: String, origin: String? = nil, startedAt: String? = nil, title: String? = nil, trigger: TriggerInfo? = nil, unread: Bool? = nil) {
+    public init(attached: Bool? = nil, closed: Bool? = nil, cwd: String, firstMessage: String? = nil, forkTurnIdx: Int64? = nil, id: String, jobStatus: String? = nil, lastRequestAt: String? = nil, model: String, origin: String? = nil, parentId: String? = nil, startedAt: String? = nil, title: String? = nil, trigger: TriggerInfo? = nil, unread: Bool? = nil) {
         self.attached = attached
+        self.closed = closed
         self.cwd = cwd
         self.firstMessage = firstMessage
+        self.forkTurnIdx = forkTurnIdx
         self.id = id
         self.jobStatus = jobStatus
         self.lastRequestAt = lastRequestAt
         self.model = model
         self.origin = origin
+        self.parentId = parentId
         self.startedAt = startedAt
         self.title = title
         self.trigger = trigger
@@ -1250,13 +1256,16 @@ public struct ThreadSummary: Codable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case attached = "attached"
+        case closed = "closed"
         case cwd = "cwd"
         case firstMessage = "first_message"
+        case forkTurnIdx = "fork_turn_idx"
         case id = "id"
         case jobStatus = "job_status"
         case lastRequestAt = "last_request_at"
         case model = "model"
         case origin = "origin"
+        case parentId = "parent_id"
         case startedAt = "started_at"
         case title = "title"
         case trigger = "trigger"

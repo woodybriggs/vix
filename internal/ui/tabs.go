@@ -84,6 +84,10 @@ var threadsSpinnerStyle = lipgloss.NewStyle().Foreground(colorPrimary)
 // header.
 var threadDirSubtitleStyle = lipgloss.NewStyle().Italic(true).Foreground(colorPrimary)
 
+// threadGhostStyle dims a closed fork ancestor row (display-only) in the
+// Threads tab so it reads as inactive next to its live forks.
+var threadGhostStyle = lipgloss.NewStyle().Foreground(colorDim)
+
 // abbreviatePath shortens an absolute path for display, replacing the user's
 // home-directory prefix with "~". Empty paths render as "(unknown)".
 func abbreviatePath(p string) string {
@@ -109,7 +113,7 @@ func abbreviatePath(p string) string {
 // row among the selectable rows (directory headers and thread rows) — chrome
 // rows (section headers, column headers, rules) are skipped when counting.
 func renderThreadsView(rows []threadListRow, width, height int, s Styles, selectedRow int, spinnerFrame string) string {
-	const colThread = 10
+	const colThread = 8
 	const colRunning = 10
 
 	innerWidth := width - 4 // width outer − 2 border sides − 2 padding sides
@@ -147,6 +151,24 @@ func renderThreadsView(rows []threadListRow, width, height int, s Styles, select
 			return id[:colThread]
 		}
 		return id
+	}
+
+	// composeCols lays out the three shared columns (Thread, Title, Running).
+	// prefix is the fork-tree lead prepended inside the Title column so a fork
+	// sits visually under its parent; the title is rune-aware truncated and
+	// padded to colMessage so the Running column stays aligned regardless of the
+	// prefix width or any wide glyphs. A fork's branch is indented one extra
+	// column so its connector starts under the second character of the Title.
+	composeCols := func(threadCol, msgText, runningCol, prefix string) string {
+		if prefix != "" {
+			prefix = " " + prefix
+		}
+		full := prefix + msgText
+		full = truncateLabel(full, colMessage)
+		if pad := colMessage - lipgloss.Width(full); pad > 0 {
+			full += strings.Repeat(" ", pad)
+		}
+		return fmt.Sprintf("%-*s  %s  %-*s", colThread, threadCol, full, colRunning, runningCol)
 	}
 
 	lines := []string{}
@@ -191,8 +213,11 @@ func renderThreadsView(rows []threadListRow, width, height int, s Styles, select
 		return "  " + threadDirSubtitleStyle.Render(glyph+" "+label)
 	}
 
-	// liveCols formats the three shared columns for a live user thread.
-	liveCols := func(sess *ThreadState) string {
+	// liveCols formats the three shared columns for a live user thread. prefix
+	// is the fork-tree lead (empty for a root). When the thread is a fork whose
+	// parent is no longer listed (prefix empty but parentID set) it keeps the
+	// legacy "⎇ <parent>/<turn>" hint so the provenance isn't lost.
+	liveCols := func(sess *ThreadState, prefix string) string {
 		threadCol := "connecting…"
 		runningCol := "—"
 		if sess.client != nil {
@@ -201,56 +226,36 @@ func renderThreadsView(rows []threadListRow, width, height int, s Styles, select
 				runningCol = formatRunningTime(renderSince(sess.client.StartedAt()))
 			}
 		}
-		msgCol := "—"
-		if sess.parentID != "" {
+		title := sess.title
+		if title == "" {
+			for _, msg := range sess.chatMessages {
+				if msg.Type == MsgUser {
+					title = strings.SplitN(msg.Text, "\n", 2)[0]
+					break
+				}
+			}
+		}
+		if title == "" {
+			title = "—"
+		}
+		msgText := title
+		if sess.parentID != "" && prefix == "" {
 			parentShort := sess.parentID
 			if dash := strings.Index(parentShort, "-"); dash >= 0 {
 				parentShort = parentShort[:dash]
 			} else if len(parentShort) > 8 {
 				parentShort = parentShort[:8]
 			}
-			prefix := "⎇ " + parentShort + "/" + fmt.Sprintf("%d", sess.forkTurnIdx+1) + "  "
-			rest := "—"
-			if sess.title != "" {
-				rest = sess.title
-			} else {
-				for _, msg := range sess.chatMessages {
-					if msg.Type == MsgUser {
-						rest = strings.SplitN(msg.Text, "\n", 2)[0]
-						break
-					}
-				}
-			}
-			full := prefix + rest
-			if len(full) > colMessage {
-				full = full[:colMessage-1] + "…"
-			}
-			msgCol = full
-		} else if sess.title != "" {
-			line := sess.title
-			if len(line) > colMessage {
-				line = line[:colMessage-1] + "…"
-			}
-			msgCol = line
-		} else {
-			for _, msg := range sess.chatMessages {
-				if msg.Type == MsgUser {
-					line := strings.SplitN(msg.Text, "\n", 2)[0]
-					if len(line) > colMessage {
-						line = line[:colMessage-1] + "…"
-					}
-					msgCol = line
-					break
-				}
-			}
+			msgText = "⎇ " + parentShort + "/" + fmt.Sprintf("%d", sess.forkTurnIdx+1) + "  " + title
 		}
-		return fmt.Sprintf("%-*s  %-*s  %-*s", colThread, threadCol, colMessage, msgCol, colRunning, runningCol)
+		return composeCols(threadCol, msgText, runningCol, prefix)
 	}
 
 	// recordCols formats the columns for a persisted, not-attached user record:
 	// its short id, title (or first message fallback), and time since last
-	// activity.
-	recordCols := func(sum protocol.ThreadSummary) string {
+	// activity. prefix is the fork-tree lead; ghost marks a closed fork ancestor
+	// (no activity time, "(closed)" marker; the caller dims the whole row).
+	recordCols := func(sum protocol.ThreadSummary, prefix string, ghost bool) string {
 		msg := sum.Title
 		if msg == "" {
 			msg = sum.FirstMessage
@@ -258,19 +263,20 @@ func renderThreadsView(rows []threadListRow, width, height int, s Styles, select
 		if msg == "" {
 			msg = "—"
 		}
-		msg = truncateLabel(msg, colMessage)
-		if pad := colMessage - lipgloss.Width(msg); pad > 0 {
-			msg += strings.Repeat(" ", pad)
+		if ghost {
+			msg += "  (closed)"
 		}
 		ranCol := "—"
-		raw := sum.LastRequestAt
-		if raw == "" {
-			raw = sum.StartedAt
+		if !ghost {
+			raw := sum.LastRequestAt
+			if raw == "" {
+				raw = sum.StartedAt
+			}
+			if t, err := time.Parse(time.RFC3339, raw); err == nil {
+				ranCol = formatRunningTime(renderSince(t)) + " ago"
+			}
 		}
-		if t, err := time.Parse(time.RFC3339, raw); err == nil {
-			ranCol = formatRunningTime(renderSince(t)) + " ago"
-		}
-		return fmt.Sprintf("%-*s  %s  %-*s", colThread, shortID(sum.ID), msg, colRunning, ranCol)
+		return composeCols(shortID(sum.ID), msg, ranCol, prefix)
 	}
 
 	// vixCols formats the three shared columns of a vix-initiated row from its
@@ -341,10 +347,16 @@ func renderThreadsView(rows []threadListRow, width, height int, s Styles, select
 			lines = append(lines, dirHeaderLine(r.dir, r.collapsed, r.count, selIdx == selectedRow))
 			selIdx++
 		case rowUserThread:
+			if r.ghost {
+				// Closed fork ancestor: display-only, dimmed, no leading
+				// indicator, no badge, and no selection slot.
+				lines = append(lines, "  "+threadGhostStyle.Render(recordCols(r.sum, r.treePrefix, true)))
+				continue
+			}
 			busy, needsInput, unread := threadRowFlags(r)
-			plainCols := recordCols(r.sum)
+			plainCols := recordCols(r.sum, r.treePrefix, false)
 			if r.live != nil {
-				plainCols = liveCols(r.live)
+				plainCols = liveCols(r.live, r.treePrefix)
 			}
 			badgeSlot := strings.Repeat(" ", badgeVisible)
 			if needsInput {

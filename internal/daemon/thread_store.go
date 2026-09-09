@@ -193,6 +193,74 @@ func listOpenThreadRecords(paths config.VixPaths) []threadRecord {
 	return out
 }
 
+// loadClosedThreadRecord reads the record for id from the closed/ directory by
+// path (no directory scan). The bool reports whether it was found. Used only to
+// keep a closed fork ancestor visible in the Threads tab; attach never consults
+// closed/ (see loadOpenThreadRecord).
+func loadClosedThreadRecord(paths config.VixPaths, id string) (threadRecord, bool) {
+	p := threadRecordPath(paths.ThreadsClosed(), id)
+	if p == "" {
+		return threadRecord{}, false
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return threadRecord{}, false
+	}
+	var rec threadRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return threadRecord{}, false
+	}
+	return rec, true
+}
+
+// closedForkAncestors returns the closed/ records that an open record still
+// points at through its ParentID chain: for every open record whose parent is
+// not itself open, the chain is walked up through closed/ until it reaches an
+// open record or a record that no longer exists. Each ancestor is returned once,
+// in creation order, so the Threads tab can show a closed parent above the forks
+// that were taken from it. Cheap: one file read per missing ancestor.
+func closedForkAncestors(paths config.VixPaths, open []threadRecord) []threadRecord {
+	present := make(map[string]bool, len(open))
+	for _, r := range open {
+		present[r.ID] = true
+	}
+	var out []threadRecord
+	for _, r := range open {
+		pid := r.ParentID
+		for pid != "" && !present[pid] {
+			rec, ok := loadClosedThreadRecord(paths, pid)
+			if !ok {
+				break
+			}
+			present[pid] = true
+			out = append(out, rec)
+			pid = rec.ParentID
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].StartedAt.Before(out[j].StartedAt)
+	})
+	return out
+}
+
+// openForkChildren returns the open/ records that were forked from id. skip
+// reports ids whose close is already in flight (they count as closed), so a
+// batch close of a fork followed by its parent is not refused. Used to refuse
+// closing a thread that still has open forks.
+func openForkChildren(paths config.VixPaths, id string, skip func(childID string) bool) []threadRecord {
+	var out []threadRecord
+	for _, r := range listThreadRecordsIn(paths.ThreadsOpen()) {
+		if r.ParentID != id || r.ID == id {
+			continue
+		}
+		if skip != nil && skip(r.ID) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 // aggregateThreadDirs ranks the working directories used by open user
 // threads. Vix-initiated records (job runs, synthetic alerts) are excluded:
 // they run from the job's cwd, not a directory the user chose. Directories are
@@ -500,6 +568,8 @@ func (r threadRecord) summary() protocol.ThreadSummary {
 		Trigger:      r.Trigger,
 		JobStatus:    r.JobStatus,
 		Unread:       r.Unread,
+		ParentID:     r.ParentID,
+		ForkTurnIdx:  r.ForkTurnIdx,
 	}
 	if !r.StartedAt.IsZero() {
 		s.StartedAt = r.StartedAt.Format(time.RFC3339)

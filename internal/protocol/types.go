@@ -108,6 +108,15 @@ type ThreadSummary struct {
 	// (thread-global, persisted — survives restarts). Cleared via the
 	// thread.mark_read command when the user views the thread.
 	Unread bool `json:"unread,omitempty"`
+	// ParentID is the thread this one was forked (or duplicated) from, and
+	// ForkTurnIdx the 0-based turn it branched at. Empty for a root thread.
+	// The Threads tab draws forks as a tree under their parent.
+	ParentID    string `json:"parent_id,omitempty"`
+	ForkTurnIdx int    `json:"fork_turn_idx,omitempty"`
+	// Closed marks a record that is no longer open but is still listed because
+	// an open thread was forked from it — the tree keeps its ancestor visible.
+	// Closed records cannot be attached or acted on; they are display-only.
+	Closed bool `json:"closed,omitempty"`
 }
 
 // DirUsage is a working directory ranked by how many open threads use it,

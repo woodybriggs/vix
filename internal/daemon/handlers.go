@@ -76,6 +76,13 @@ func RegisterBuiltinHandlers(s *Server) {
 			s.threadMu.Unlock()
 			summaries = append(summaries, sum)
 		}
+		// A closed thread that still has open forks stays listed (display
+		// only) so the fork tree keeps its ancestor visible.
+		for _, r := range closedForkAncestors(paths, recs) {
+			sum := r.summary()
+			sum.Closed = true
+			summaries = append(summaries, sum)
+		}
 		return map[string]any{"status": "ok", "threads": summaries}, nil
 	})
 
@@ -135,11 +142,29 @@ func RegisterBuiltinHandlers(s *Server) {
 		cwd, _ := data["cwd"].(string)
 		configDir, _ := data["config_dir"].(string)
 		paths := config.NewVixPaths(configDir, s.homeVixDir, cwd)
+		if msg := s.openForksMessage(paths, id); msg != "" {
+			return map[string]any{"status": "error", "message": msg}, nil
+		}
 		if err := moveThreadToClosed(paths, id); err != nil {
 			return map[string]any{"status": "error", "message": err.Error()}, nil
 		}
 		s.broadcastThreadsChanged()
 		return map[string]any{"status": "ok"}, nil
+	})
+
+	// thread.open_forks reports how many open threads were forked from id
+	// (across every window). The TUI asks before offering to close a thread so
+	// it can refuse up front — a thread.close is fire-and-forget and the tab is
+	// dropped as soon as it is sent.
+	s.RegisterHandler("thread.open_forks", func(data map[string]any) (map[string]any, error) {
+		id, _ := data["id"].(string)
+		if id == "" {
+			return map[string]any{"status": "error", "message": "missing 'id'"}, nil
+		}
+		cwd, _ := data["cwd"].(string)
+		configDir, _ := data["config_dir"].(string)
+		paths := config.NewVixPaths(configDir, s.homeVixDir, cwd)
+		return map[string]any{"status": "ok", "count": s.openForkCount(paths, id)}, nil
 	})
 
 	// thread.rename sets a manual title on a persisted, not-open thread record

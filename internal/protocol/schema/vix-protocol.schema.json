@@ -1280,11 +1280,17 @@
         "attached": {
           "type": "boolean"
         },
+        "closed": {
+          "type": "boolean"
+        },
         "cwd": {
           "type": "string"
         },
         "first_message": {
           "type": "string"
+        },
+        "fork_turn_idx": {
+          "type": "integer"
         },
         "id": {
           "type": "string"
@@ -1299,6 +1305,9 @@
           "type": "string"
         },
         "origin": {
+          "type": "string"
+        },
+        "parent_id": {
           "type": "string"
         },
         "started_at": {

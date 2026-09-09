@@ -999,6 +999,17 @@ func (s *Server) handleThread(conn net.Conn, scanner *bufio.Scanner, startCmd pr
 				return
 			}
 
+			if cmd.Type == "thread.close" {
+				// Refuse to close a thread that still has open forks: the
+				// fork tree would lose its ancestor. The TUI pre-checks
+				// this; the guard here covers other clients and windows.
+				if msg := s.openForksMessage(thread.paths, threadID); msg != "" {
+					thread.emit("event.error", protocol.EventError{Message: msg})
+					continue
+				}
+				thread.closeRequested.Store(true)
+			}
+
 			select {
 			case thread.commandChan <- cmd:
 			case <-thread.ctx.Done():
@@ -1118,6 +1129,31 @@ func (s *Server) notifySubscribers() {
 		default:
 		}
 	}
+}
+
+// openForkCount returns how many open threads were forked from id. A live
+// child whose close is already in flight (closeRequested) counts as closed.
+func (s *Server) openForkCount(paths config.VixPaths, id string) int {
+	return len(openForkChildren(paths, id, func(childID string) bool {
+		s.threadMu.Lock()
+		child := s.threads[childID]
+		s.threadMu.Unlock()
+		return child != nil && child.closeRequested.Load()
+	}))
+}
+
+// openForksMessage returns the user-facing refusal for closing id while forks
+// of it are still open, or "" when closing is allowed.
+func (s *Server) openForksMessage(paths config.VixPaths, id string) string {
+	n := s.openForkCount(paths, id)
+	if n == 0 {
+		return ""
+	}
+	noun := "thread was"
+	if n > 1 {
+		noun = "threads were"
+	}
+	return fmt.Sprintf("Cannot close: %d open %s forked from this thread. Close the forks first.", n, noun)
 }
 
 // Threads returns a snapshot of live threads plus persisted open threads.

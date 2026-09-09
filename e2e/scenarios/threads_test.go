@@ -962,6 +962,166 @@ func TestThreadsDeleteConfirm(t *testing.T) {
 	h.UI.Shot("close-declined")
 }
 
+// forkChildOf returns the record whose parent is present among recs (the fork)
+// and the one that is a root, or nils when the shape isn't a single 2-node tree.
+func forkChildOf(recs []threadRec) (root, child *threadRec) {
+	if len(recs) != 2 {
+		return nil, nil
+	}
+	byID := map[string]bool{}
+	for i := range recs {
+		byID[recs[i].ID] = true
+	}
+	for i := range recs {
+		if recs[i].ParentID != "" && byID[recs[i].ParentID] {
+			child = &recs[i]
+		} else {
+			root = &recs[i]
+		}
+	}
+	return root, child
+}
+
+// TestThreadsForkTree verifies a fork is drawn as a tree branch under its parent
+// in the Threads tab: after duplicating a seeded thread, disk carries a 2-node
+// parent→child tree and the tab renders the box-drawing connector.
+func TestThreadsForkTree(t *testing.T) {
+	h := harness.Start(t, threadsMeta("a fork renders as a tree branch under its parent in the Threads tab"))
+
+	h.UI.WaitStable(500 * time.Millisecond)
+
+	// One completed turn so the thread can be forked (duplicated).
+	h.Mock.Enqueue(harness.Text("ok-to-fork"))
+	h.UI.Type("seed turn")
+	h.UI.Enter()
+	h.UI.WaitFor("ok-to-fork")
+
+	h.UI.Key("f1")
+	h.UI.WaitFor("User-initiated")
+	h.UI.Type("d") // duplicate = fork; the new record's parent_id is the source
+
+	openDir := h.HomePath(".vix", "threads", "open")
+	var recs []threadRec
+	if !pollUntil(10*time.Second, func() bool {
+		recs = readThreadRecords(openDir)
+		return len(recs) == 2
+	}) {
+		t.Fatalf("expected 2 records after fork, got %d in %s", len(recs), openDir)
+	}
+	root, child := forkChildOf(recs)
+	if root == nil || child == nil {
+		t.Fatalf("want a single parent→fork tree on disk, got %+v", recs)
+	}
+
+	// Screen: the fork renders under its parent with a tree connector directly
+	// before its title (a bare "╰─" would also match the tab-bar/dialog chrome).
+	if !pollUntil(5*time.Second, func() bool { return h.UI.Contains("╰─ seed turn") }) {
+		t.Fatalf("fork tree connector not shown before the title; screen:\n%s", h.UI.Snapshot())
+	}
+	h.UI.Shot("fork-tree")
+}
+
+// TestThreadsForkCloseRefused verifies that closing a thread which still has an
+// open fork is refused up front: the parent's `x` surfaces an error popup, the
+// close dialog never opens, and no record is archived.
+func TestThreadsForkCloseRefused(t *testing.T) {
+	h := harness.Start(t, threadsMeta("closing a thread with an open fork is refused"))
+
+	h.UI.WaitStable(500 * time.Millisecond)
+
+	h.Mock.Enqueue(harness.Text("ok-to-fork"))
+	h.UI.Type("seed turn")
+	h.UI.Enter()
+	h.UI.WaitFor("ok-to-fork")
+
+	h.UI.Key("f1")
+	h.UI.WaitFor("User-initiated")
+	h.UI.Type("d") // fork the source; cursor syncs onto the new fork
+
+	openDir := h.HomePath(".vix", "threads", "open")
+	if !pollUntil(10*time.Second, func() bool { return len(readThreadRecords(openDir)) == 2 }) {
+		t.Fatalf("fork never persisted; got %d records in %s", len(readThreadRecords(openDir)), openDir)
+	}
+	// Wait for the fork tree to render (the fork's live parent link has
+	// propagated) before acting — otherwise the parent doesn't yet know it has
+	// a child, exactly as a user would only close once the tree is visible.
+	if !pollUntil(5*time.Second, func() bool { return h.UI.Contains("╰─ seed turn") }) {
+		t.Fatalf("fork tree connector never rendered; screen:\n%s", h.UI.Snapshot())
+	}
+
+	// Move the cursor up from the fork onto its parent, then try to close it.
+	h.UI.Key("up")
+	h.UI.Type("x")
+	if !pollUntil(5*time.Second, func() bool { return h.UI.Contains("Cannot close") }) {
+		t.Fatalf("expected a refusal popup for a parent with an open fork; screen:\n%s", h.UI.Snapshot())
+	}
+	h.UI.Shot("fork-close-refused")
+
+	if h.UI.Contains("Close thread?") {
+		t.Fatalf("close dialog should not open when the thread has open forks; screen:\n%s", h.UI.Snapshot())
+	}
+	if n := len(readThreadRecords(openDir)); n != 2 {
+		t.Fatalf("records changed after a refused close: got %d, want 2", n)
+	}
+}
+
+// TestThreadsClosedParentGhost verifies a closed parent whose fork is still open
+// stays visible as a dimmed "(closed)" ghost above its fork. This legacy state
+// can no longer be produced through the UI (closing such a parent is refused),
+// so the test hand-moves the parent record to closed/ and relaunches.
+func TestThreadsClosedParentGhost(t *testing.T) {
+	h := harness.Start(t, threadsMeta("a closed parent stays visible as a dimmed ghost above its open fork"))
+
+	h.UI.WaitStable(500 * time.Millisecond)
+
+	h.Mock.Enqueue(harness.Text("ok-to-fork"))
+	h.UI.Type("seed turn")
+	h.UI.Enter()
+	h.UI.WaitFor("ok-to-fork")
+	h.UI.WaitStable(300 * time.Millisecond)
+
+	h.UI.Key("f1")
+	h.UI.WaitFor("User-initiated")
+	h.UI.Type("d")
+
+	openDir := h.HomePath(".vix", "threads", "open")
+	var recs []threadRec
+	if !pollUntil(10*time.Second, func() bool {
+		recs = readThreadRecords(openDir)
+		return len(recs) == 2
+	}) {
+		t.Fatalf("expected 2 records after fork, got %d in %s", len(recs), openDir)
+	}
+	root, child := forkChildOf(recs)
+	if root == nil || child == nil {
+		t.Fatalf("want a parent→fork tree on disk, got %+v", recs)
+	}
+
+	// Move the parent record open/ -> closed/ while keeping the fork open, then
+	// relaunch so thread.list surfaces the closed parent as a ghost ancestor.
+	closedDir := h.HomePath(".vix", "threads", "closed")
+	if err := os.MkdirAll(closedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(openDir, root.ID+".json"), filepath.Join(closedDir, root.ID+".json")); err != nil {
+		t.Fatalf("move parent to closed/: %v", err)
+	}
+
+	h.Daemon.Restart()
+	h.UI.WaitStable(700 * time.Millisecond)
+	h.UI.Key("f1")
+	h.UI.WaitFor("User-initiated")
+
+	// The closed parent is shown with a "(closed)" marker, and the still-open
+	// fork nests beneath it with a tree connector.
+	if !pollUntil(5*time.Second, func() bool {
+		return h.UI.Contains("(closed)") && h.UI.Contains("╰─ seed turn")
+	}) {
+		t.Fatalf("closed parent ghost / fork tree not shown; screen:\n%s", h.UI.Snapshot())
+	}
+	h.UI.Shot("closed-parent-ghost")
+}
+
 // jobSpec is a one-shot scheduled job whose fire time is in the past, so the
 // scheduler runs it immediately at startup. The run executes against the mock
 // and persists a Vix-initiated thread record.
