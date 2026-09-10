@@ -33,23 +33,25 @@ func TestGoldenProviderData(t *testing.T) {
 		t.Fatalf("loadEmbedded: %v", err)
 	}
 	cases := []struct {
-		id          string
-		prefix      string
-		wire        WireFormat
-		effort      string
-		authScheme  string
-		baseURLEnv  string // expected resolved base url with no env set
-		effortStyle string
+		id            string
+		prefix        string
+		wire          WireFormat
+		effort        string
+		authScheme    string
+		baseURLEnv    string // expected resolved base url with no env set
+		effortStyle   string
+		sessionHeader string // non-empty when provider configures x-opencode-session etc.
 	}{
-		{"anthropic", "anthropic", WireMessages, EffortAdaptive, AuthSchemeXAPIKey, "https://api.anthropic.com/v1", EffortStyleNone},
-		{"openai", "openai", WireResponses, EffortOpenAIReasoning, AuthSchemeBearer, "https://api.openai.com/v1", EffortStyleNone},
-		{"openrouter", "openrouter", WireChatCompletions, EffortOpenAIReasoning, AuthSchemeBearer, "https://openrouter.ai/api/v1", EffortStyleReasoningEffort},
-		{"minimax", "minimax", WireChatCompletions, EffortAdaptive, AuthSchemeBearer, "https://api.minimax.io/v1", EffortStyleReasoningSplit},
-		{"mimo", "mimo", WireChatCompletions, EffortOpenAIReasoning, AuthSchemeBearer, "https://api.xiaomimimo.com/v1", EffortStyleReasoningEffort},
-		{"bedrock", "bedrock", WireMessages, EffortAdaptive, AuthSchemeBearer, "https://bedrock-runtime.us-east-1.amazonaws.com/", EffortStyleNone},
-		{"ollama", "ollama", WireChatCompletions, "", AuthSchemeBearer, "http://localhost:11434/v1", EffortStyleNone},
-		{"llamacpp", "llamacpp", WireChatCompletions, "", AuthSchemeBearer, "http://localhost:8080/v1", EffortStyleNone},
-		{"lemonade", "lemonade", WireChatCompletions, "", AuthSchemeBearer, "http://localhost:13305/v1", EffortStyleNone},
+		{"anthropic", "anthropic", WireMessages, EffortAdaptive, AuthSchemeXAPIKey, "https://api.anthropic.com/v1", EffortStyleNone, ""},
+		{"openai", "openai", WireResponses, EffortOpenAIReasoning, AuthSchemeBearer, "https://api.openai.com/v1", EffortStyleNone, ""},
+		{"openrouter", "openrouter", WireChatCompletions, EffortOpenAIReasoning, AuthSchemeBearer, "https://openrouter.ai/api/v1", EffortStyleReasoningEffort, ""},
+		{"minimax", "minimax", WireChatCompletions, EffortAdaptive, AuthSchemeBearer, "https://api.minimax.io/v1", EffortStyleReasoningSplit, ""},
+		{"mimo", "mimo", WireChatCompletions, EffortOpenAIReasoning, AuthSchemeBearer, "https://api.xiaomimimo.com/v1", EffortStyleReasoningEffort, ""},
+		{"opencode", "opencode", WireChatCompletions, EffortOpenAIReasoning, AuthSchemeBearer, "https://opencode.ai/zen/go/v1", EffortStyleReasoningEffort, "x-opencode-session"},
+		{"bedrock", "bedrock", WireMessages, EffortAdaptive, AuthSchemeBearer, "https://bedrock-runtime.us-east-1.amazonaws.com/", EffortStyleNone, ""},
+		{"ollama", "ollama", WireChatCompletions, "", AuthSchemeBearer, "http://localhost:11434/v1", EffortStyleNone, ""},
+		{"llamacpp", "llamacpp", WireChatCompletions, "", AuthSchemeBearer, "http://localhost:8080/v1", EffortStyleNone, ""},
+		{"lemonade", "lemonade", WireChatCompletions, "", AuthSchemeBearer, "http://localhost:13305/v1", EffortStyleNone, ""},
 	}
 	for _, c := range cases {
 		p, ok := reg.Lookup(c.id)
@@ -75,6 +77,9 @@ func TestGoldenProviderData(t *testing.T) {
 		}
 		if res.EffortStyle != c.effortStyle {
 			t.Errorf("%s: effort_style = %q, want %q", c.id, res.EffortStyle, c.effortStyle)
+		}
+		if res.SessionHeader != c.sessionHeader {
+			t.Errorf("%s: session_header = %q, want %q", c.id, res.SessionHeader, c.sessionHeader)
 		}
 	}
 }
@@ -126,6 +131,7 @@ func TestParseModel(t *testing.T) {
 		{"openrouter/openai/gpt-5.1", "openrouter", "openai/gpt-5.1", false},
 		{"minimax/MiniMax-M2.7", "minimax", "MiniMax-M2.7", false},
 		{"mimo/mimo-v2.5-pro", "mimo", "mimo-v2.5-pro", false},
+		{"opencode/deepseek-v4-pro", "opencode", "deepseek-v4-pro", false},
 		{"bedrock/anthropic.claude-sonnet-4-5-v2:0", "bedrock", "anthropic.claude-sonnet-4-5-v2:0", false},
 		{"", "", "", true},
 		{"claude-sonnet-4-6", "", "", true},
@@ -484,6 +490,42 @@ func TestEmbeddedLoadIgnoresEnv(t *testing.T) {
 		if _, err := loadEmbedded(); err != nil {
 			t.Errorf("LLAMACPP_BASE_URL=%q: loadEmbedded must ignore env, got %v", val, err)
 		}
+	}
+}
+
+// TestMergeInferenceSessionHeader verifies that the overlay merge propagates
+// SessionHeader from the overlay into the base provider.
+func TestMergeInferenceSessionHeader(t *testing.T) {
+	base := InferenceSpec{
+		BaseURL:    "https://api.example/v1",
+		AuthScheme: AuthSchemeBearer,
+	}
+	overlay := InferenceSpec{
+		SessionHeader: "x-opencode-session",
+	}
+	merged := mergeInference(base, overlay)
+	if merged.SessionHeader != "x-opencode-session" {
+		t.Errorf("mergeInference SessionHeader = %q, want %q", merged.SessionHeader, "x-opencode-session")
+	}
+	// Non-overlaid fields must survive.
+	if merged.BaseURL != "https://api.example/v1" {
+		t.Errorf("mergeInference BaseURL = %q, want original", merged.BaseURL)
+	}
+}
+
+// TestMergeInferenceSessionHeaderNotClobbered verifies that an overlay without
+// SessionHeader does not clear an existing one.
+func TestMergeInferenceSessionHeaderNotClobbered(t *testing.T) {
+	base := InferenceSpec{
+		BaseURL:       "https://api.example/v1",
+		SessionHeader: "x-existing",
+	}
+	overlay := InferenceSpec{
+		AuthScheme: AuthSchemeBearer,
+	}
+	merged := mergeInference(base, overlay)
+	if merged.SessionHeader != "x-existing" {
+		t.Errorf("mergeInference should preserve existing SessionHeader, got %q", merged.SessionHeader)
 	}
 }
 
