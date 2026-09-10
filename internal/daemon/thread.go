@@ -3019,7 +3019,7 @@ func (s *Thread) handleSpawnAgent(ctx context.Context, input map[string]any) (st
 		// the subagent loop and its tool executor to the thread context, not
 		// the per-dispatch ctx, which is cancelled as soon as
 		// threadDispatchToolCalls returns.
-		bgCtx := s.ctx
+		bgCtx := llm.WithSessionID(s.ctx, s.id)
 		bgExecuteTool := func(name string, params map[string]any, cwd string) (*ToolResult, error) {
 			return s.executeToolConfirmed(bgCtx, name, params), nil
 		}
@@ -3053,6 +3053,7 @@ func (s *Thread) handleSpawnAgent(ctx context.Context, input map[string]any) (st
 	def, maxv := s.toolTimeoutBounds()
 	agentID := nextTaskID()
 	s.fireSubagentStart(agentType, agentID, prompt)
+	ctx = llm.WithSessionID(ctx, s.id)
 	result, err := RunSubagent(ctx, config, prompt, cred, parentModel, s.server.plugins, executeTool, s.cwd, s.emitHooks(), def, maxv, s.searchDirsSlice()...)
 	s.fireSubagentStop(agentType, agentID, result)
 
@@ -3083,6 +3084,7 @@ func (s *Thread) RunExploration(ctx context.Context, agentName, prompt string) (
 		return s.executeToolConfirmed(ctx, name, params), nil
 	}
 	def, maxv := s.toolTimeoutBounds()
+	ctx = llm.WithSessionID(ctx, s.id)
 	return RunSubagent(ctx, agentConfig, prompt, cred, s.model, s.server.plugins, executeTool, s.cwd, nil, def, maxv, s.searchDirsSlice()...)
 }
 
