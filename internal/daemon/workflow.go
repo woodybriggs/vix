@@ -99,8 +99,9 @@ type AgentRunner struct {
 	// tool, so a step that calls Send more than once doesn't duplicate them.
 	contextInjected bool
 
-	// SessionID is the thread's stable UUID, injected as x-opencode-session
-	// on every outbound LLM request for routing and prompt caching.
+	// SessionID is injected as x-opencode-session on every outbound LLM
+	// request for routing and prompt caching. Fresh runners get a new UUID;
+	// cloned runners inherit the parent's so requests stay in one session.
 	SessionID string
 
 	// Per-Send() accumulated usage (reset at start of each Send call)

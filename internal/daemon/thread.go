@@ -2319,7 +2319,8 @@ func (s *Thread) summarizeMessages(msgs []llm.MessageParam) (string, error) {
 	// Ensure the conversation ends on a user message: the dropped prefix ends on
 	// an assistant turn, which the API would otherwise treat as a prefill.
 	msgs = append(msgs[:len(msgs):len(msgs)], llm.NewUserMessage(llm.NewTextBlock(compactionRequestPrompt)))
-	msg, _, err := s.llm.StreamMessage(s.ctx, system, msgs, nil, func(string) {}, func(string) {})
+	ctx := llm.WithSessionID(s.ctx, s.id)
+	msg, _, err := s.llm.StreamMessage(ctx, system, msgs, nil, func(string) {}, func(string) {})
 	if err != nil {
 		return "", err
 	}
