@@ -109,13 +109,6 @@ func (h *headerStripperTransport) RoundTrip(req *http.Request) (*http.Response, 
 			req.Header.Set(h.sessionHeader, sid)
 		}
 	}
-	if StreamDebugVerbose() {
-		for k, vs := range req.Header {
-			if k == h.sessionHeader {
-				log.Printf("[httpx] session header %s: %s", k, v)
-			}
-		}
-	}
 	return h.base.RoundTrip(req)
 }
 
