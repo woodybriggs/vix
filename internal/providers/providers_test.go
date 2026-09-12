@@ -14,7 +14,7 @@ func TestEmbeddedLoadsAndValidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadEmbedded: %v", err)
 	}
-	wantIDs := []string{"anthropic", "openai", "openrouter", "minimax", "mimo", "deepseek", "bedrock", "ollama", "llamacpp", "lemonade"}
+	wantIDs := []string{"anthropic", "openai", "openrouter", "minimax", "mimo", "deepseek", "bedrock", "ollama", "llamacpp", "lemonade", "orcarouter"}
 	if got := reg.IDs(); len(got) != len(wantIDs) {
 		t.Fatalf("IDs = %v, want %v", got, wantIDs)
 	}
@@ -46,6 +46,7 @@ func TestGoldenProviderData(t *testing.T) {
 		{"openrouter", "openrouter", WireChatCompletions, EffortOpenAIReasoning, AuthSchemeBearer, "https://openrouter.ai/api/v1", EffortStyleReasoningEffort},
 		{"minimax", "minimax", WireChatCompletions, EffortAdaptive, AuthSchemeBearer, "https://api.minimax.io/v1", EffortStyleReasoningSplit},
 		{"mimo", "mimo", WireChatCompletions, EffortOpenAIReasoning, AuthSchemeBearer, "https://api.xiaomimimo.com/v1", EffortStyleReasoningEffort},
+		{"orcarouter", "orcarouter", WireChatCompletions, EffortOpenAIReasoning, AuthSchemeBearer, "https://api.orcarouter.ai/v1", EffortStyleReasoningEffort},
 		{"bedrock", "bedrock", WireMessages, EffortAdaptive, AuthSchemeBearer, "https://bedrock-runtime.us-east-1.amazonaws.com/", EffortStyleNone},
 		{"ollama", "ollama", WireChatCompletions, "", AuthSchemeBearer, "http://localhost:11434/v1", EffortStyleNone},
 		{"llamacpp", "llamacpp", WireChatCompletions, "", AuthSchemeBearer, "http://localhost:8080/v1", EffortStyleNone},
@@ -124,6 +125,7 @@ func TestParseModel(t *testing.T) {
 		{"anthropic/claude-opus-4-8", "anthropic", "claude-opus-4-8", false},
 		{"openai/gpt-5.1", "openai", "gpt-5.1", false},
 		{"openrouter/openai/gpt-5.1", "openrouter", "openai/gpt-5.1", false},
+		{"orcarouter/anthropic/claude-sonnet-5", "orcarouter", "anthropic/claude-sonnet-5", false},
 		{"minimax/MiniMax-M2.7", "minimax", "MiniMax-M2.7", false},
 		{"mimo/mimo-v2.5-pro", "mimo", "mimo-v2.5-pro", false},
 		{"bedrock/anthropic.claude-sonnet-4-5-v2:0", "bedrock", "anthropic.claude-sonnet-4-5-v2:0", false},
@@ -441,7 +443,7 @@ func TestLocalFlagMergeAndGolden(t *testing.T) {
 			t.Errorf("%s: expected a none credential method", id)
 		}
 	}
-	for _, id := range []string{"anthropic", "openai", "openrouter", "minimax", "mimo", "bedrock"} {
+	for _, id := range []string{"anthropic", "openai", "openrouter", "minimax", "mimo", "bedrock", "orcarouter"} {
 		p, _ := reg.Lookup(id)
 		if p.Local {
 			t.Errorf("%s: must not be local", id)
