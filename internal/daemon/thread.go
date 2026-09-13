@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/get-vix/vix/internal/agent"
@@ -176,6 +177,11 @@ type Thread struct {
 	// action), distinguishing an explicit close (move record open->closed) from
 	// a bare disconnect (record stays open for next-run reopen).
 	closedByUser bool
+	// closeRequested is set by the connection reader the moment it forwards a
+	// thread.close, before the run loop acts on it. The open-forks guard treats
+	// a child with closeRequested as already closed, so a batch close (fork
+	// first, then its parent — the quit "close all" path) is not refused.
+	closeRequested atomic.Bool
 
 	// Provenance: empty origin means user-started; "vix" marks threads the
 	// daemon initiated itself (scheduled job runs, synthetic alert threads).

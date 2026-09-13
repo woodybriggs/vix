@@ -1038,6 +1038,11 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.beginRenameSelected()
 			case "x":
 				if sum, ok := m.vixSelectedSummary(); ok {
+					// Refuse to dismiss a thread that still has open forks —
+					// the fork tree would lose its ancestor.
+					if n := m.openForkChildCount(sum.ID); n > 0 {
+						return m, m.emitStatusMsg(forkCloseBlockedMsg(n), StatusMsgError)
+					}
 					// Dismiss a vix-initiated record: same confirmation dialog
 					// as closing a live thread.
 					m.vixDismissID = sum.ID
@@ -1046,6 +1051,9 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				if idx, ok := m.threadsSelectedIdx(); ok {
+					if n := m.openForkChildCount(m.threads[idx].daemonThreadID); n > 0 {
+						return m, m.emitStatusMsg(forkCloseBlockedMsg(n), StatusMsgError)
+					}
 					m.threadCloseIdx = idx
 					m.threadCloseSelected = 1 // default No
 					m.state = StateThreadCloseConfirm
@@ -1744,6 +1752,8 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		sess.client = msg.client
 		sess.daemonThreadID = msg.client.ThreadID()
+		sess.parentID = msg.client.ParentID()
+		sess.forkTurnIdx = msg.client.ForkTurnIdx()
 		sess.reconnecting = false
 		if t := msg.client.StartedAt(); !t.IsZero() {
 			sess.startedAt = t
@@ -1788,6 +1798,8 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		sess.client = msg.client
 		sess.daemonThreadID = msg.client.ThreadID()
+		sess.parentID = msg.client.ParentID()
+		sess.forkTurnIdx = msg.client.ForkTurnIdx()
 		sess.phase = phaseLive
 		sess.reconnecting = false
 		if t := msg.client.StartedAt(); !t.IsZero() {
@@ -4584,7 +4596,11 @@ func (m *Model) closeThreadsForQuit(closeAll bool) {
 	if !closeAll {
 		return
 	}
-	for _, sess := range m.threads {
+	// Close deepest forks first: the daemon refuses to close a thread that
+	// still has open forks, so a parent must go after its children. Ordering by
+	// fork depth (descending) sends children first; each sets its close-request
+	// flag, which the parent's guard treats as already closed.
+	for _, sess := range m.quitCloseOrder() {
 		if sess.client != nil {
 			// Mark the thread so the disconnect that follows thread.close is
 			// treated as expected rather than triggering a reconnect (which
@@ -4595,6 +4611,34 @@ func (m *Model) closeThreadsForQuit(closeAll bool) {
 			sess.client.SendClose()
 		}
 	}
+}
+
+// quitCloseOrder returns this window's live threads ordered so every fork comes
+// before its parent (deepest first), the order thread.close must be sent in to
+// satisfy the daemon's open-fork guard during a "close all" quit.
+func (m *Model) quitCloseOrder() []*ThreadState {
+	byID := map[string]*ThreadState{}
+	for _, s := range m.threads {
+		if s.daemonThreadID != "" {
+			byID[s.daemonThreadID] = s
+		}
+	}
+	depth := func(s *ThreadState) int {
+		d := 0
+		seen := map[string]bool{}
+		for pid := s.parentID; pid != "" && byID[pid] != nil && !seen[pid]; {
+			seen[pid] = true
+			d++
+			pid = byID[pid].parentID
+		}
+		return d
+	}
+	out := make([]*ThreadState, len(m.threads))
+	copy(out, m.threads)
+	sort.SliceStable(out, func(i, j int) bool {
+		return depth(out[i]) > depth(out[j])
+	})
+	return out
 }
 
 // doCloseThread closes the thread at threadIdx and returns to the Threads tab.
@@ -4719,6 +4763,109 @@ func (m *Model) syncMermaidCtx(sess *ThreadState) {
 type rowTarget struct {
 	liveIdx int
 	sum     *protocol.ThreadSummary
+	// treePrefix is the box-drawing lead for a fork row (e.g. "╰─ " or
+	// "   ├─ "), empty for a root thread. Stamped by forkTreeOrder.
+	treePrefix string
+	// ghost marks a closed fork ancestor kept visible only so the tree has its
+	// parent. Display-only: not selectable, not counted in a folded dir header.
+	ghost bool
+}
+
+// rowThreadID returns the row's own thread id (a live thread's daemon id, or a
+// record's id), or "" when a live thread is still connecting.
+func (m *Model) rowThreadID(r rowTarget) string {
+	if r.sum != nil {
+		return r.sum.ID
+	}
+	if r.liveIdx >= 0 && r.liveIdx < len(m.threads) {
+		return m.threads[r.liveIdx].daemonThreadID
+	}
+	return ""
+}
+
+// rowParentID returns the id of the thread this row was forked from, or "" for
+// a root thread.
+func (m *Model) rowParentID(r rowTarget) string {
+	if r.sum != nil {
+		return r.sum.ParentID
+	}
+	if r.liveIdx >= 0 && r.liveIdx < len(m.threads) {
+		return m.threads[r.liveIdx].parentID
+	}
+	return ""
+}
+
+// forkTreeOrder reorders a directory block's rows (already sorted by creation
+// time) so each fork sits directly under its parent — depth-first, siblings and
+// roots keeping their incoming order — and stamps each row's treePrefix with the
+// box-drawing lead. A row whose parent is not in this block is a root (the
+// parent was deleted, or lives in another directory). Robust against cycles and
+// orphans: any row not reached from a root is emitted as a root at the end.
+func (m *Model) forkTreeOrder(rows []rowTarget) []rowTarget {
+	n := len(rows)
+	if n < 2 {
+		return rows
+	}
+	idIndex := make(map[string]int, n)
+	for i, r := range rows {
+		if id := m.rowThreadID(r); id != "" {
+			idIndex[id] = i
+		}
+	}
+	children := make([][]int, n)
+	isChild := make([]bool, n)
+	for i, r := range rows {
+		pid := m.rowParentID(r)
+		if pid == "" {
+			continue
+		}
+		if pi, ok := idIndex[pid]; ok && pi != i {
+			children[pi] = append(children[pi], i)
+			isChild[i] = true
+		}
+	}
+	out := make([]rowTarget, 0, n)
+	visited := make([]bool, n)
+	var walk func(idx int, ancestorPrefix string, isLast, isRoot bool)
+	walk = func(idx int, ancestorPrefix string, isLast, isRoot bool) {
+		if visited[idx] {
+			return
+		}
+		visited[idx] = true
+		r := rows[idx]
+		if isRoot {
+			r.treePrefix = ""
+		} else if isLast {
+			r.treePrefix = ancestorPrefix + "╰─ "
+		} else {
+			r.treePrefix = ancestorPrefix + "├─ "
+		}
+		out = append(out, r)
+		var childPrefix string
+		switch {
+		case isRoot:
+			childPrefix = ""
+		case isLast:
+			childPrefix = ancestorPrefix + "   "
+		default:
+			childPrefix = ancestorPrefix + "│  "
+		}
+		kids := children[idx]
+		for ci, k := range kids {
+			walk(k, childPrefix, ci == len(kids)-1, false)
+		}
+	}
+	for i := range rows {
+		if !isChild[i] {
+			walk(i, "", true, true)
+		}
+	}
+	// Any node left unvisited (part of a cycle) is emitted as a root so no row
+	// is ever dropped.
+	for i := range rows {
+		walk(i, "", true, true)
+	}
+	return out
 }
 
 // rowStartedAt returns the creation time used to order a Threads-tab row. A
@@ -4815,7 +4962,7 @@ func (m *Model) userDirBlocks() []userDirBlock {
 			dir = m.cwd
 		}
 		b := get(dir)
-		b.rows = append(b.rows, rowTarget{liveIdx: -1, sum: rec})
+		b.rows = append(b.rows, rowTarget{liveIdx: -1, sum: rec, ghost: rec.Closed})
 		if t := recordActivity(rec); t.After(b.last) {
 			b.last = t
 		}
@@ -4841,6 +4988,8 @@ func (m *Model) userDirBlocks() []userDirBlock {
 		sort.SliceStable(b.rows, func(i, j int) bool {
 			return m.userRowSortKey(b.rows[i]).Before(m.userRowSortKey(b.rows[j]))
 		})
+		// Then reorder into a fork tree: each fork directly under its parent.
+		b.rows = m.forkTreeOrder(b.rows)
 		out = append(out, *b)
 	}
 	return out
@@ -4915,10 +5064,18 @@ type threadListRow struct {
 	// sum is the column source for a thread row: a persisted record's summary,
 	// or a live Vix-initiated row's origin vixSummary.
 	sum protocol.ThreadSummary
+	// treePrefix is the fork-tree box-drawing lead for a thread row (empty for
+	// a root); ghost marks a closed fork ancestor (display-only, not selectable).
+	treePrefix string
+	ghost      bool
 }
 
-// selectable reports whether the navigation cursor can land on this row.
+// selectable reports whether the navigation cursor can land on this row. Ghost
+// (closed fork ancestor) rows are display-only and never selectable.
 func (r threadListRow) selectable() bool {
+	if r.ghost {
+		return false
+	}
 	return r.kind == rowDirHeader || r.kind == rowUserThread || r.kind == rowVixThread
 }
 
@@ -4939,12 +5096,19 @@ func (m *Model) threadListRows() []threadListRow {
 		rows = append(rows, threadListRow{kind: rowUserHeader})
 		for _, b := range blocks {
 			collapsed := m.collapsedDirs[b.dir]
-			rows = append(rows, threadListRow{kind: rowDirHeader, dir: b.dir, collapsed: collapsed, count: len(b.rows)})
+			// The folded header counts real threads only, not ghost ancestors.
+			count := 0
+			for _, r := range b.rows {
+				if !r.ghost {
+					count++
+				}
+			}
+			rows = append(rows, threadListRow{kind: rowDirHeader, dir: b.dir, collapsed: collapsed, count: count})
 			if collapsed {
 				continue
 			}
 			for _, r := range b.rows {
-				row := threadListRow{kind: rowUserThread, liveIdx: -1}
+				row := threadListRow{kind: rowUserThread, liveIdx: -1, treePrefix: r.treePrefix, ghost: r.ghost}
 				if r.sum != nil {
 					row.sum = *r.sum
 				} else {
@@ -5185,6 +5349,41 @@ func (m *Model) vixSelectedSummary() (protocol.ThreadSummary, bool) {
 		return r.sum, true
 	}
 	return protocol.ThreadSummary{}, false
+}
+
+// openForkChildCount counts the open threads (live tabs in this window plus
+// persisted, not-closed user records) that were forked from id. It is the
+// local pre-check that lets the "x" action refuse before the confirm dialog —
+// a thread.close is fire-and-forget, so the daemon's own guard would arrive too
+// late to keep the tab. Forks open in another window aren't visible here; the
+// daemon guard is the backstop for those.
+func (m *Model) openForkChildCount(id string) int {
+	if id == "" {
+		return 0
+	}
+	seen := map[string]bool{}
+	for _, s := range m.threads {
+		if s.parentID == id && s.daemonThreadID != "" && s.daemonThreadID != id {
+			seen[s.daemonThreadID] = true
+		}
+	}
+	for i := range m.userThreadRecords {
+		r := m.userThreadRecords[i]
+		if !r.Closed && r.ParentID == id && r.ID != id {
+			seen[r.ID] = true
+		}
+	}
+	return len(seen)
+}
+
+// forkCloseBlockedMsg is the user-facing refusal shown when closing a thread
+// that still has open forks. Kept in sync with the daemon's openForksMessage.
+func forkCloseBlockedMsg(n int) string {
+	noun := "thread was"
+	if n > 1 {
+		noun = "threads were"
+	}
+	return fmt.Sprintf("Cannot close: %d open %s forked from this thread. Close the forks first.", n, noun)
 }
 
 // hasAlertThreads reports whether any thread is waiting for user input. It

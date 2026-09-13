@@ -35,9 +35,11 @@ func fetchVixThreads(socketPath, cwd, configDir, authToken string) tea.Cmd {
 			if s.Attached {
 				continue
 			}
-			if s.Origin == "vix" {
+			if s.Origin == "vix" && !s.Closed {
 				vixOut = append(vixOut, s)
 			} else {
+				// Closed fork ancestors always join the user group: that is
+				// where the fork tree is drawn.
 				userOut = append(userOut, s)
 			}
 		}

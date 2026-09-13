@@ -356,8 +356,9 @@ func main() {
 					// project-scoped. Skip threads another instance owns
 					// (Attached) and vix-initiated records (job runs / alerts),
 					// which are browsed from the threads list, never
-					// auto-reopened as chat tabs.
-					if !sum.Attached && sum.Origin != "vix" && sum.CWD == cfg.CWD {
+					// auto-reopened as chat tabs. Closed fork ancestors are
+					// display-only rows and cannot be attached.
+					if !sum.Attached && !sum.Closed && sum.Origin != "vix" && sum.CWD == cfg.CWD {
 						claimable = append(claimable, sum)
 					}
 				}

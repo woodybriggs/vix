@@ -105,7 +105,7 @@ vix
 
 </div>
 
-Vix ships with built-in support for **Anthropic, OpenAI, OpenRouter, AWS Bedrock, Ollama, llama.cpp** and more.
+Vix ships with built-in support for **Anthropic, OpenAI, OpenRouter, OrcaRouter, AWS Bedrock, Ollama, llama.cpp** and more.
 
 You can add your own provider — or override any setting on a built-in one — by dropping a
 `providers.json` file into `~/.vix/` or `./.vix/` (project-level). The file is merged on top

@@ -248,6 +248,8 @@ func newThreadState(cfg *config.Config, client *daemon.ThreadClient) *ThreadStat
 	}
 	if client != nil {
 		s.daemonThreadID = client.ThreadID()
+		s.parentID = client.ParentID()
+		s.forkTurnIdx = client.ForkTurnIdx()
 	}
 	return s
 }

@@ -419,6 +419,26 @@ func (c *Client) DismissThread(cwd, configDir, id string) error {
 	return nil
 }
 
+// OpenForkCount returns how many open threads (in any window) were forked
+// from id. The TUI checks this before offering to close a thread.
+func (c *Client) OpenForkCount(cwd, configDir, id string) (int, error) {
+	resp, err := c.sendRequest(map[string]any{
+		"command":    "thread.open_forks",
+		"cwd":        cwd,
+		"config_dir": configDir,
+		"id":         id,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if resp["status"] != "ok" {
+		msg, _ := resp["message"].(string)
+		return 0, fmt.Errorf("thread.open_forks failed: %s", msg)
+	}
+	n, _ := resp["count"].(float64)
+	return int(n), nil
+}
+
 // RenameThread sets a manual title on a persisted, not-currently-open thread
 // record by ID (open/<id>.json). Pins the title so auto-titling won't overwrite
 // it. Refused by the daemon when the thread is live in a connection (use
@@ -525,6 +545,13 @@ type ThreadClient struct {
 	// mermaid diagrams. Captured here because StartThread consumes the
 	// thread_started event before the TUI's event loop can see it.
 	whiteboardBase string
+	// parentID / forkTurnIdx carry this thread's fork lineage as reported by the
+	// daemon in the thread_started event (empty/0 for a root thread). Captured
+	// here for the same reason as whiteboardBase: the connect handshake consumes
+	// thread_started before the TUI's event loop can see it, so the Threads-tab
+	// fork tree would otherwise never learn a live thread's parent.
+	parentID    string
+	forkTurnIdx int
 	// Shared-secret token stamped onto every outgoing ThreadCommand. Set
 	// via SetAuthToken before Connect; matches the daemon's
 	// -auth-token-path. Empty when the daemon side is also unauthenticated.
@@ -570,6 +597,14 @@ func (sc *ThreadClient) StartedAt() time.Time { return sc.startedAt }
 // WhiteboardBase returns the local web UI origin reported by the daemon in the
 // thread_started event, or "" when the web UI is disabled.
 func (sc *ThreadClient) WhiteboardBase() string { return sc.whiteboardBase }
+
+// ParentID returns the id of the thread this one was forked from, as reported
+// by the daemon in the thread_started event ("" for a root thread).
+func (sc *ThreadClient) ParentID() string { return sc.parentID }
+
+// ForkTurnIdx returns the 0-based turn this thread was forked at (meaningful
+// only when ParentID is non-empty).
+func (sc *ThreadClient) ForkTurnIdx() int { return sc.forkTurnIdx }
 
 // Connect establishes a persistent connection and starts an agent thread.
 func (sc *ThreadClient) Connect(cwd, configDir, model string, forceInit bool, enableAutomaticWritePermission bool, enableAutomaticDirectoryAccess bool, headless bool) error {
@@ -684,6 +719,8 @@ func (sc *ThreadClient) connectWith(startData protocol.ThreadStartData) error {
 		json.Unmarshal(data, &started)
 		sc.threadID = started.ThreadID
 		sc.whiteboardBase = started.WhiteboardBase
+		sc.parentID = started.ParentID
+		sc.forkTurnIdx = started.ForkTurnIdx
 		if t, err := time.Parse(time.RFC3339, started.StartedAt); err == nil {
 			sc.startedAt = t
 		}

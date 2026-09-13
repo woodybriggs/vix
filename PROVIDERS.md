@@ -1,6 +1,6 @@
 # Custom Providers Guide
 
-Vix ships with built-in support for Anthropic, OpenAI, OpenRouter, Bedrock, Ollama, llama.cpp,
+Vix ships with built-in support for Anthropic, OpenAI, OpenRouter, OrcaRouter, Bedrock, Ollama, llama.cpp,
 Lemonade, and more.
 You can add your own providers — or override settings of the built-ins — without touching the
 binary. Everything is driven by a plain JSON file you drop into `~/.vix/`.

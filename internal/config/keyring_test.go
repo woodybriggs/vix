@@ -154,6 +154,7 @@ func TestListStoredProviderKeys(t *testing.T) {
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
 	t.Setenv("OLLAMA_API_KEY", "")
 	t.Setenv("LLAMACPP_API_KEY", "")
+	t.Setenv("ORCAROUTER_API_KEY", "")
 	DeleteProviderKey("anthropic")
 	DeleteProviderKey("openai")
 	DeleteProviderKey("openrouter")
@@ -162,13 +163,14 @@ func TestListStoredProviderKeys(t *testing.T) {
 	DeleteProviderKey("bedrock")
 	DeleteProviderKey("ollama")
 	DeleteProviderKey("llamacpp")
+	DeleteProviderKey("orcarouter")
 
 	StoreProviderKey("anthropic", "sk-ant-test-key")
 	defer DeleteProviderKey("anthropic")
 
 	keys := ListStoredProviderKeys()
-	if len(keys) != 10 {
-		t.Fatalf("expected 10 provider entries, got %d", len(keys))
+	if len(keys) != 11 {
+		t.Fatalf("expected 11 provider entries, got %d", len(keys))
 	}
 
 	anthropicFound := false
